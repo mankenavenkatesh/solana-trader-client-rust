@@ -103,12 +103,12 @@ impl GrpcClient {
         })
     }
 
+
     pub async fn sign_and_submit<T: IntoTransactionMessage + Clone>(
         &mut self,
         txs: Vec<T>,
         submit_opts: SubmitParams,
-        use_bundle: bool,
-        keypair: &Keypair,
+        use_bundle: bool,        
     ) -> Result<Vec<String>> {
         let block_hash = self
             .client
@@ -117,6 +117,87 @@ impl GrpcClient {
             .into_inner()
             .block_hash;
 
+        let keypair = self.get_keypair()?;
+        if txs.len() == 1 {
+            let signed_tx = sign_transaction(&txs[0], keypair, block_hash).await?;
+
+            let req = PostSubmitRequest {
+                transaction: Some(TransactionMessage {
+                    content: signed_tx.content,
+                    is_cleanup: signed_tx.is_cleanup,
+                }),
+                skip_pre_flight: submit_opts.skip_pre_flight,
+                front_running_protection: Some(submit_opts.front_running_protection),
+                use_staked_rp_cs: Some(submit_opts.use_staked_rpcs),
+                fast_best_effort: Some(submit_opts.fast_best_effort),
+                tip: None,
+                allow_back_run: submit_opts.allow_back_run,
+                revenue_address: submit_opts.revenue_address,
+                allow_revert: Some(false),
+                sniping: Some(false),
+            };
+
+            let signature = self
+                .client
+                .post_submit_v2(req)
+                .await?
+                .into_inner()
+                .signature;
+
+            return Ok(vec![signature]);
+        }
+
+        let mut entries = Vec::with_capacity(txs.len());
+        for tx in txs {
+            let signed_tx = sign_transaction(&tx, keypair, block_hash.clone()).await?;
+
+            let entry = api::PostSubmitRequestEntry {
+                transaction: Some(TransactionMessage {
+                    content: signed_tx.content,
+                    is_cleanup: signed_tx.is_cleanup,
+                }),
+                skip_pre_flight: submit_opts.skip_pre_flight,
+            };
+            entries.push(entry);
+        }
+
+        let batch_request = api::PostSubmitBatchRequest {
+            entries,
+            use_bundle: Some(use_bundle),
+            submit_strategy: submit_opts.submit_strategy.into(),
+            front_running_protection: Some(submit_opts.front_running_protection),
+        };
+
+        let response = self
+            .client
+            .post_submit_batch_v2(batch_request)
+            .await?
+            .into_inner();
+
+        let signatures = response
+            .transactions
+            .into_iter()
+            .filter(|entry| entry.submitted)
+            .map(|entry| entry.signature)
+            .collect();
+
+        Ok(signatures)
+    }
+
+    pub async fn sign_and_submit_with_keypair<T: IntoTransactionMessage + Clone>(
+        &mut self,
+        txs: Vec<T>,
+        submit_opts: SubmitParams,
+        use_bundle: bool,        
+        keypair: &Keypair,
+    ) -> Result<Vec<String>> {
+        let block_hash = self
+            .client
+            .get_recent_block_hash_v2(GetRecentBlockHashRequestV2 { offset: 0 })
+            .await?
+            .into_inner()
+            .block_hash;
+        
         if txs.len() == 1 {
             let signed_tx = sign_transaction(&txs[0], keypair, block_hash).await?;
 
