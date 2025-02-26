@@ -108,6 +108,7 @@ impl GrpcClient {
         txs: Vec<T>,
         submit_opts: SubmitParams,
         use_bundle: bool,
+        keypair: &Keypair,
     ) -> Result<Vec<String>> {
         let block_hash = self
             .client
@@ -115,8 +116,6 @@ impl GrpcClient {
             .await?
             .into_inner()
             .block_hash;
-
-        let keypair = self.get_keypair()?;
 
         if txs.len() == 1 {
             let signed_tx = sign_transaction(&txs[0], keypair, block_hash).await?;
